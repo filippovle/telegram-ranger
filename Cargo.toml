@@ -2,6 +2,7 @@
 name = "telegram-ranger"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 teloxide = { version = "0.17.0", features = ["macros"] }
@@ -11,6 +12,15 @@ pretty_env_logger = "0.5"
 log = "0.4"
 anyhow = "1"
 dashmap = "6"
-chrono = { version = "0.4", features = ["clock"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+chrono = "0.4.41"
+
+[profile.release]
+opt-level = "z"         # оптимизация на размер
+lto = "thin"            # тонкое LTO (часто почти как "fat", но быстрее билд)
+codegen-units = 1       # лучше оптимизация/меньше размер
+panic = "abort"         # без раскрутки стека — ощутимо меньше
+strip = true            # убрать символы/отладку из бинарника
+debug = false           # на всякий
+overflow-checks = false # в релизе обычно и так false

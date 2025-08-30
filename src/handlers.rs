@@ -4,25 +4,29 @@ use std::sync::Arc;
 use teloxide::prelude::*;
 
 pub async fn on_message(bot: Bot, state: Arc<AppState>, msg: Message) -> Result<()> {
+    // фиксируем сообщения тех, кто уже ждёт капчу
+    if let (Some(from), chat) = (msg.from(), &msg.chat) {
+        let key = AppState::key(chat.id, from.id);
+        if let Some(mut pending) = state.pending.get_mut(&key) {
+            // не трекаем служебные события без msg.id
+            if msg.id.0 != 0 {
+                pending.user_message_ids.push(msg.id.0);
+            }
+        }
+    }
+
+    // команды (и в личке, и в группе)
     if let Some(text) = msg.text() {
         if text.starts_with('/') {
-            // Команды доступны и в личке, и в группе; админ/не-админ различается внутри.
+            // важно: передаём &msg, не двигаем его
             commands::handle_command(&bot, state.clone(), &msg, text).await?;
             return Ok(());
         }
     }
 
-    // Группы — поддержка legacy new_chat_members
-    if (msg.chat.is_group() || msg.chat.is_supergroup()) && msg.new_chat_members().is_some() {
-        if let Some(new_members) = msg.new_chat_members() {
-            for u in new_members {
-                captcha::ask_captcha(&bot, state.clone(), msg.chat.id, &u).await?;
-            }
-        }
-    }
-
     Ok(())
 }
+
 
 pub async fn on_chat_member_update(
     bot: Bot,
