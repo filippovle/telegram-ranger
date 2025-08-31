@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  telegram-ranger:
+    build: .
+    container_name: telegram-ranger
+    restart: unless-stopped
+
+    # .env читается ИМЕННО docker compose на ХОСТЕ
+    # (контейнер внутри к файлу не обращается)
+    env_file:
+      - /opt/telegram-ranger/.env
+
+    # Перезапишем путь для state на том
+    environment:
+      - STATE_FILE=/data/state.json
+      - TZ=Europe/Moscow
+    # Персистим состояние
+    volumes:
+      - /opt/telegram-ranger/data:/data:rw
+
+    # Без публикации портов
