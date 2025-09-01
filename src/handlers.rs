@@ -5,7 +5,7 @@ use teloxide::prelude::*;
 
 pub async fn on_message(bot: Bot, state: Arc<AppState>, msg: Message) -> Result<()> {
     // фиксируем сообщения тех, кто уже ждёт капчу
-    if let (Some(from), chat) = (msg.from(), &msg.chat) {
+    if let (Some(from), chat) = (msg.from.as_ref(), &msg.chat) {
         let key = AppState::key(chat.id, from.id);
         if let Some(mut pending) = state.pending.get_mut(&key) {
             // не трекаем служебные события без msg.id

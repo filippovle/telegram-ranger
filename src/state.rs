@@ -8,6 +8,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use std::{fs, io};
 use teloxide::types::{ChatId, User, UserId};
+use crate::utils::normalize_username;
 
 /// Ожидание прохождения капчи (в памяти, не пишется в файл).
 #[derive(Clone)]
@@ -210,11 +211,4 @@ impl AppState {
             let _ = store.save(&snapshot);
         }
     }
-}
-
-/// Приведение "@Name" -> "name" (lower-case, без '@').
-fn normalize_username<S: AsRef<str>>(name: S) -> String {
-    let n = name.as_ref().trim();
-    let n = n.strip_prefix('@').unwrap_or(n);
-    n.to_lowercase()
 }

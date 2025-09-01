@@ -1,12 +1,20 @@
-//! Команды бота. Вход — общий `handle_command`, который сам решает, админ это
-//! или нет, и роутит в нужный обработчик.
+// src/commands.rs
+
+//! Команды бота.
+//! - Админу показываем подробную шпаргалку с описаниями и примерами.
+//! - Обычным пользователям — краткое описание и ссылка на установку/README.
+//! В дальнейшем строки легко вынести в i18n.
 
 use crate::state::AppState;
+use crate::utils::normalize_username;
 use anyhow::Result;
 use std::sync::Arc;
 use teloxide::prelude::*;
 
-/// Точка входа для всех команд.
+// Ссылка на README проекта (отображается в /help для всех)
+const README_URL: &str = "https://github.com/filippovle/telegram-ranger#readme";
+
+/// Точка входа для всех команд (и в личке, и в группах).
 pub async fn handle_command(
     bot: &Bot,
     state: Arc<AppState>,
@@ -25,7 +33,8 @@ pub async fn handle_command(
     }
 }
 
-/// Команды для админа.
+/* ========================== Админ ========================== */
+
 async fn handle_admin_command(
     bot: &Bot,
     state: Arc<AppState>,
@@ -34,25 +43,21 @@ async fn handle_admin_command(
     arg: Option<&str>,
 ) -> Result<()> {
     match cmd {
-        "help" | "start" => {
-            bot.send_message(
-                msg.chat.id,
-                "Команды админа:
-- /allowbot <id|@username>
-- /denybot <id|@username>
-- /allowuser <id|@username>
-- /denyuser <id|@username>
-- /listallow",
-            )
-            .await?;
+        "start" | "help" => {
+            bot.send_message(msg.chat.id, admin_help_text())
+                .parse_mode(teloxide::types::ParseMode::Html)
+                .await?;
         }
 
         // ---- БОТЫ (по id или @username) ----
         "allowbot" => {
             let Some(a) = arg else {
-                bot.send_message(msg.chat.id, "Usage: /allowbot <id|@username>")
-                    .await?;
-                return Ok(());
+                return send_usage(
+                    bot,
+                    msg,
+                    "Usage: <code>/allowbot &lt;id|@username&gt;</code>",
+                )
+                .await;
             };
             if let Some(id) = parse_numeric(a) {
                 state.allow_bot_id(id);
@@ -66,9 +71,12 @@ async fn handle_admin_command(
         }
         "denybot" => {
             let Some(a) = arg else {
-                bot.send_message(msg.chat.id, "Usage: /denybot <id|@username>")
-                    .await?;
-                return Ok(());
+                return send_usage(
+                    bot,
+                    msg,
+                    "Usage: <code>/denybot &lt;id|@username&gt;</code>",
+                )
+                .await;
             };
             if let Some(id) = parse_numeric(a) {
                 state.deny_bot_id(id);
@@ -84,9 +92,12 @@ async fn handle_admin_command(
         // ---- ЛЮДИ (по id или @username) ----
         "allowuser" => {
             let Some(a) = arg else {
-                bot.send_message(msg.chat.id, "Usage: /allowuser <id|@username>")
-                    .await?;
-                return Ok(());
+                return send_usage(
+                    bot,
+                    msg,
+                    "Usage: <code>/allowuser &lt;id|@username&gt;</code>",
+                )
+                .await;
             };
             if let Some(id) = parse_numeric(a) {
                 state.allow_user_id(id);
@@ -95,20 +106,26 @@ async fn handle_admin_command(
             } else {
                 let uname = normalize_username(a);
                 if uname.is_empty() {
-                    bot.send_message(msg.chat.id, "Usage: /allowuser <id|@username>")
-                        .await?;
-                } else {
-                    state.allow_username(&uname);
-                    bot.send_message(msg.chat.id, format!("✅ User @{uname} allowed"))
-                        .await?;
+                    return send_usage(
+                        bot,
+                        msg,
+                        "Usage: <code>/allowuser &lt;id|@username&gt;</code>",
+                    )
+                    .await;
                 }
+                state.allow_username(&uname);
+                bot.send_message(msg.chat.id, format!("✅ User @{uname} allowed"))
+                    .await?;
             }
         }
         "denyuser" => {
             let Some(a) = arg else {
-                bot.send_message(msg.chat.id, "Usage: /denyuser <id|@username>")
-                    .await?;
-                return Ok(());
+                return send_usage(
+                    bot,
+                    msg,
+                    "Usage: <code>/denyuser &lt;id|@username&gt;</code>",
+                )
+                .await;
             };
             if let Some(id) = parse_numeric(a) {
                 state.deny_user_id(id);
@@ -117,13 +134,16 @@ async fn handle_admin_command(
             } else {
                 let uname = normalize_username(a);
                 if uname.is_empty() {
-                    bot.send_message(msg.chat.id, "Usage: /denyuser <id|@username>")
-                        .await?;
-                } else {
-                    state.deny_username(&uname);
-                    bot.send_message(msg.chat.id, format!("⛔ User @{uname} denied"))
-                        .await?;
+                    return send_usage(
+                        bot,
+                        msg,
+                        "Usage: <code>/denyuser &lt;id|@username&gt;</code>",
+                    )
+                    .await;
                 }
+                state.deny_username(&uname);
+                bot.send_message(msg.chat.id, format!("⛔ User @{uname} denied"))
+                    .await?;
             }
         }
 
@@ -150,34 +170,53 @@ async fn handle_admin_command(
                 .collect();
 
             let msg_text = format!(
-                "<b>Whitelists</b>\nBots (ids): {}\nBots (names): {}\nUsers (ids): {}\nUsers (names): {}",
-                if bots.is_empty() { "(none)".into() } else { bots.join(", ") },
-                if bot_names.is_empty() { "(none)".into() } else { bot_names.join(", ") },
-                if uids.is_empty() { "(none)".into() } else { uids.join(", ") },
-                if unames.is_empty() { "(none)".into() } else { unames.join(", ") },
+                "<b>Whitelists</b>\n\
+                 <b>Bots (ids)</b>: {}\n\
+                 <b>Bots (names)</b>: {}\n\
+                 <b>Users (ids)</b>: {}\n\
+                 <b>Users (names)</b>: {}",
+                list_or_none(&bots),
+                list_or_none(&bot_names),
+                list_or_none(&uids),
+                list_or_none(&unames),
             );
+
             bot.send_message(msg.chat.id, msg_text)
                 .parse_mode(teloxide::types::ParseMode::Html)
                 .await?;
         }
 
-        _ => {}
+        "about" => {
+            bot.send_message(msg.chat.id, about_text())
+                .parse_mode(teloxide::types::ParseMode::Html)
+                .await?;
+        }
+
+        _ => {
+            // Нестрогий fallback: подскажем /help
+            bot.send_message(
+                msg.chat.id,
+                "Неизвестная команда. Посмотри <b>/help</b> для списка и примеров.",
+            )
+            .parse_mode(teloxide::types::ParseMode::Html)
+            .await?;
+        }
     }
     Ok(())
 }
 
-/// Ответ обычному пользователю (не администратору).
+/* ======================== Пользователь ======================== */
+
 async fn handle_user_command(bot: &Bot, msg: &Message, cmd: &str) -> Result<()> {
     match cmd {
-        "start" => {
-            bot.send_message(
-                msg.chat.id,
-                "Привет! Я Telegram Ranger 👋\nДобавь меня в группу — включу капчу для новых участников.",
-            )
+        "start" | "help" => {
+            bot.send_message(msg.chat.id, user_help_text())
+                .parse_mode(teloxide::types::ParseMode::Html)
                 .await?;
         }
-        "help" => {
-            bot.send_message(msg.chat.id, "Команды доступны только администратору.")
+        "about" => {
+            bot.send_message(msg.chat.id, about_text())
+                .parse_mode(teloxide::types::ParseMode::Html)
                 .await?;
         }
         _ => { /* тихо игнорируем */ }
@@ -185,7 +224,76 @@ async fn handle_user_command(bot: &Bot, msg: &Message, cmd: &str) -> Result<()> 
     Ok(())
 }
 
-/* -------------------- утилиты парсинга -------------------- */
+/* ========================== Тексты ========================== */
+
+fn admin_help_text() -> String {
+    r#"<b>Telegram Ranger — справка (админ)</b>
+
+<b>Что делает бот</b>
+• Капча для новых участников (кнопка с таймаутом).
+• По таймауту — кик/бан (настраивается).
+• Whitelist пользователей и ботов (по ID или @username).
+• Можно включить удаление сообщений непроверенных пользователей.
+
+<b>Быстрые команды</b>
+<pre>/allowbot &lt;id|@username&gt;</pre>
+Добавить бота в белый список. Идентификатор — числовой ID или @username (без учёта регистра).
+
+<pre>/denybot &lt;id|@username&gt;</pre>
+Убрать бота из белого списка.
+
+<pre>/allowuser &lt;id|@username&gt;</pre>
+Добавить человека в белый список (пройдёт без капчи).
+
+<pre>/denyuser &lt;id|@username&gt;</pre>
+Убрать человека из белого списка.
+
+<pre>/listallow</pre>
+Показать текущие whitelist'ы.
+
+<pre>/about</pre>
+Информация о проекте и ссылка на README.
+
+<b>Полезно знать</b>
+• @username обрабатывается без учёта регистра и без «@».
+• Для кика по таймауту у бота должны быть права администратора на «Удаление участников» и «Ограничение участников».
+• Настройки берутся из <code>.env</code>.
+"#.to_string()
+}
+
+fn user_help_text() -> String {
+    format!(
+        r#"<b>Telegram Ranger</b>
+Я помогаю защищать группы от спама: прошу новичков подтвердить, что они человек.
+
+Если хочешь установить такого же бота к себе — смотри инструкцию:
+<a href="{url}">{url}</a>
+
+Доступные команды в этом чате:
+• <b>/help</b> — краткая справка.
+• Остальные команды доступны администратору группы."#,
+        url = README_URL
+    )
+}
+
+fn about_text() -> String {
+    format!(
+        r#"<b>Telegram Ranger</b>
+Исходники и руководство: <a href="{url}">{url}</a>
+Автор: Lev Filippov
+Лицензия: MIT"#,
+        url = README_URL
+    )
+}
+
+/* ======================== Утилиты ======================== */
+
+async fn send_usage(bot: &Bot, msg: &Message, usage_html: &str) -> Result<()> {
+    bot.send_message(msg.chat.id, usage_html)
+        .parse_mode(teloxide::types::ParseMode::Html)
+        .await?;
+    Ok(())
+}
 
 /// Возвращает ("cmd", Some("аргументы")) для строк вида `/cmd@bot arg1 arg2`.
 fn parse_command(text: &str) -> (&str, Option<&str>) {
@@ -207,8 +315,10 @@ fn parse_numeric(s: &str) -> Option<u64> {
     s.trim().parse::<u64>().ok()
 }
 
-fn normalize_username<S: AsRef<str>>(name: S) -> String {
-    let n = name.as_ref().trim();
-    let n = n.strip_prefix('@').unwrap_or(n);
-    n.to_lowercase()
+fn list_or_none(items: &[String]) -> String {
+    if items.is_empty() {
+        "(none)".into()
+    } else {
+        items.join(", ")
+    }
 }

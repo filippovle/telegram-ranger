@@ -11,7 +11,6 @@ use anyhow::Result;
 use chrono::{Duration as ChronoDuration, Utc};
 use log::{error, info, warn};
 use std::sync::Arc;
-use std::time::Duration as StdDuration;
 use teloxide::prelude::*;
 use teloxide::types::ChatPermissions;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageId, User};
