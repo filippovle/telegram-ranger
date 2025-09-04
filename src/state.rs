@@ -17,6 +17,8 @@ pub struct Pending {
     pub captcha_msg_id: i32,
     pub _deadline: Instant,
     pub user_message_ids: Vec<i32>,
+    pub captcha_mode: crate::config::CaptchaMode,
+    pub expected_answer: Option<String>,
 }
 
 /// То, что реально сохраняем на диск.

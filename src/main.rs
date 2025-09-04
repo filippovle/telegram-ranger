@@ -2,9 +2,9 @@ mod app;
 mod config;
 mod state;
 mod handlers;
-mod captcha;
 mod commands;
 mod utils;
+mod captcha;
 
 use anyhow::Result;
 
