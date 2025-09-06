@@ -6,6 +6,7 @@
 //!   чтобы math2 могла принять ответ текстом.
 
 mod button;
+mod image;
 mod math2;
 // mod image;
 
@@ -25,12 +26,12 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{Duration as ChronoDuration, Utc};
 use log::{debug, error, warn};
-// <— info убран
 use std::collections::HashSet;
 use std::sync::Arc;
 use teloxide::prelude::*;
 use teloxide::types::{CallbackQuery, ChatPermissions, Message, MessageId, ParseMode, User};
 
+use crate::captcha::image::ImageCaptcha;
 pub use button::ButtonCaptcha;
 pub use math2::Math2Captcha;
 
@@ -71,13 +72,9 @@ fn provider(mode: CaptchaMode) -> Option<Box<dyn Captcha>> {
         CaptchaMode::Off => None,
         CaptchaMode::Button => Some(Box::new(ButtonCaptcha)),
         CaptchaMode::Math2 => Some(Box::new(Math2Captcha)),
-        CaptchaMode::Image => {
-            // TODO: ImageCaptcha
-            Some(Box::new(ButtonCaptcha))
-        }
+        CaptchaMode::Image => Some(Box::new(ImageCaptcha)),
     }
 }
-
 /// PUBLIC API (совместим с прежним): запросить капчу / пропустить.
 pub async fn ask_captcha(
     bot: &Bot,
@@ -85,16 +82,6 @@ pub async fn ask_captcha(
     chat_id: ChatId,
     user: &User,
 ) -> Result<()> {
-    // Полностью запретить сообщения на время проверки (кроме math2 — ей нужен текст)
-    let until = Utc::now() + ChronoDuration::seconds(state.cfg.captcha_timeout_secs as i64);
-    if !matches!(state.cfg.captcha_mode, CaptchaMode::Math2) {
-        let no_send = ChatPermissions::empty();
-        let _ = bot
-            .restrict_chat_member(chat_id, user.id, no_send)
-            .until_date(until)
-            .await;
-    }
-
     // 1) Боты: если не в whitelist — баним; если в whitelist — пропускаем.
     if user.is_bot {
         if !state.is_bot_allowed_user(user) {
@@ -107,7 +94,7 @@ pub async fn ask_captcha(
         return Ok(());
     }
 
-    // 2) Люди из whitelist — пропускаем без капчи (и снимаем ограничения).
+    // 2) Люди из whitelist / captcha off — сразу разрешаем.
     if state.is_user_allowed(user) || matches!(state.cfg.captcha_mode, CaptchaMode::Off) {
         debug!(
             "Skip captcha: whitelisted or captcha off (user={})",
@@ -117,26 +104,46 @@ pub async fn ask_captcha(
         return Ok(());
     }
 
-    // 3) По режиму .env
+    // 3) Стратегия по режиму
     let Some(strategy) = provider(state.cfg.captcha_mode) else {
         allow_user(bot, chat_id, user.id).await?;
         return Ok(());
     };
 
-    // Дедуп (первичная проверка)
+    // 4) Дедуп по (chat_id, user_id)
     let key = AppState::key(chat_id, user.id);
     if state.pending.contains_key(&key) {
         return Ok(());
     }
 
-    // Показать капчу
+    // 5) ЕДИНЫЙ таймаут: и для Telegram until_date, и для локального sleep_until
+    let secs = state.cfg.captcha_timeout_secs as i64;
+    let timeout = std::time::Duration::from_secs(secs as u64);
+    let deadline = tokio::time::Instant::now() + timeout; // локальный дедлайн
+    let until = Utc::now() + ChronoDuration::seconds(secs); // Telegram until_date
+    debug!(
+        "CAPTCHA timeout secs={} mode={:?} chat={} user={}",
+        secs, state.cfg.captcha_mode, chat_id.0, user.id.0
+    );
+
+    // 6) Ограничения на время решения (по режиму)
+    let perms = match state.cfg.captcha_mode {
+        CaptchaMode::Button => ChatPermissions::empty(), // нельзя писать
+        CaptchaMode::Math2 | CaptchaMode::Image => ChatPermissions::SEND_MESSAGES, // только текст
+        CaptchaMode::Off => ChatPermissions::empty(),    // сюда не попадём
+    };
+    if let Err(e) = bot
+        .restrict_chat_member(chat_id, user.id, perms)
+        .until_date(until)
+        .await
+    {
+        warn!("restrict_chat_member failed: {}", e);
+    }
+
+    // 7) Показать капчу
     let challenge = strategy.ask(bot, &state, chat_id, user).await?;
 
-    // Считаем таймер один раз
-    let timeout = state.timeout();
-    let deadline = tokio::time::Instant::now() + timeout;
-
-    // Сохранить Pending (защита от гонки)
+    // 8) Сохранить pending (ожидаем ответ)
     let inserted = state.pending.insert(
         key,
         Pending {
@@ -148,7 +155,7 @@ pub async fn ask_captcha(
             expected_answer: challenge.expected_answer,
         },
     );
-
+    // Если вдруг гонка и запись уже была — чистим только что отправленное сообщение и выходим.
     if inserted.is_some() {
         let _ = bot
             .delete_message(chat_id, MessageId(challenge.message.id.0))
@@ -156,7 +163,7 @@ pub async fn ask_captcha(
         return Ok(());
     }
 
-    // Таймаут по дедлайну
+    // 9) Планируем таймаут
     schedule_timeout_cleanup(bot.clone(), state.clone(), chat_id, user.id, deadline);
 
     Ok(())
@@ -501,7 +508,7 @@ mod tests {
         assert!(provider(CaptchaMode::Off).is_none());
         assert!(provider(CaptchaMode::Button).is_some());
         assert!(provider(CaptchaMode::Math2).is_some());
-        assert!(provider(CaptchaMode::Image).is_some()); // пока Image -> Button
+        assert!(provider(CaptchaMode::Image).is_some());
     }
 
     #[test]
